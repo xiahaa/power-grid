@@ -111,6 +111,9 @@ hardware:
 # Logging
 logging:
   use_tensorboard: true
+  use_swanlab: true           # Enable SwanLab experiment tracking
+  swanlab_project: "power-grid-estimation"  # SwanLab project name
+  swanlab_experiment: "ieee118-graph-mamba"  # Experiment name
   log_dir: "logs/ieee118"
   log_freq: 5
   save_visualization: true

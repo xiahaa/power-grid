@@ -19,6 +19,14 @@ from pathlib import Path
 from tqdm import tqdm
 import time
 
+# SwanLab integration
+try:
+    import swanlab
+    SWANLAB_AVAILABLE = True
+except ImportError:
+    SWANLAB_AVAILABLE = False
+    print("Warning: SwanLab not installed. Install with: pip install swanlab")
+
 from data.dataloader import get_dataloader
 from models.graph_mamba import GraphMamba
 from physics.constraints import PhysicsInformedLayer, PhysicsInformedGraphMamba
@@ -197,13 +205,44 @@ def main(args):
     save_dir = Path(config['training']['save_dir'])
     save_dir.mkdir(parents=True, exist_ok=True)
 
+    # Initialize loggers
+    writer = None
+    swanlab_run = None
+
     # TensorBoard
     if config['logging']['use_tensorboard']:
         log_dir = Path(config['logging']['log_dir'])
         log_dir.mkdir(parents=True, exist_ok=True)
         writer = SummaryWriter(log_dir)
+        print("✓ TensorBoard logging enabled")
+
+    # SwanLab
+    if config['logging'].get('use_swanlab', False):
+        if SWANLAB_AVAILABLE:
+            swanlab_run = swanlab.init(
+                project=config['logging'].get('swanlab_project', 'power-grid-estimation'),
+                experiment_name=config['logging'].get('swanlab_experiment', config['system']['name']),
+                config={
+                    'system': config['system']['name'],
+                    'num_buses': config['system']['num_buses'],
+                    'pmu_coverage': config['system']['pmu_coverage'],
+                    'batch_size': config['training']['batch_size'],
+                    'learning_rate': config['training']['learning_rate'],
+                    'num_epochs': config['training']['num_epochs'],
+                    'spatial_encoder': config['model']['spatial_encoder'],
+                    'temporal_encoder': config['model']['temporal_encoder'],
+                    'physics_enabled': config['physics']['enabled'],
+                    'constraint_type': config['physics']['constraint_type'],
+                },
+                description=f"Physics-Informed Graph Mamba for {config['system']['name']} power grid estimation"
+            )
+            print("✓ SwanLab logging enabled")
+            print(f"  Project: {config['logging'].get('swanlab_project', 'power-grid-estimation')}")
+            print(f"  Experiment: {config['logging'].get('swanlab_experiment', config['system']['name'])}")
+        else:
+            print("⚠ SwanLab requested but not installed. Skipping.")
     else:
-        writer = None
+        print("✓ SwanLab logging disabled")
 
     # Data loaders
     print("\nLoading data...")
@@ -305,13 +344,48 @@ def main(args):
         print(f"  Val R_line MAE: {val_results.get('r_line_mae', 0):.6f}")
         print(f"  LR: {current_lr:.2e}")
 
+        # TensorBoard logging
         if writer:
             writer.add_scalar('Loss/train', train_losses['total'], epoch)
             writer.add_scalar('Loss/val', val_results['total'], epoch)
+            writer.add_scalar('Loss/train_state', train_losses['state'], epoch)
+            writer.add_scalar('Loss/train_parameter', train_losses['parameter'], epoch)
+            writer.add_scalar('Loss/train_physics', train_losses['physics'], epoch)
             writer.add_scalar('LR', current_lr, epoch)
             for key, val in val_results.items():
-                if 'rmse' in key or 'mae' in key:
+                if 'rmse' in key or 'mae' in key or 'mape' in key:
                     writer.add_scalar(f'Metrics/{key}', val, epoch)
+
+        # SwanLab logging
+        if swanlab_run:
+            swanlab.log({
+                # Losses
+                'train/loss_total': train_losses['total'],
+                'train/loss_state': train_losses['state'],
+                'train/loss_parameter': train_losses['parameter'],
+                'train/loss_physics': train_losses['physics'],
+                'val/loss_total': val_results['total'],
+                'val/loss_state': val_results.get('state', 0),
+                'val/loss_parameter': val_results.get('parameter', 0),
+                'val/loss_physics': val_results.get('physics', 0),
+
+                # State estimation metrics
+                'val/v_mag_rmse': val_results.get('v_mag_rmse', 0),
+                'val/v_mag_mae': val_results.get('v_mag_mae', 0),
+                'val/v_mag_mape': val_results.get('v_mag_mape', 0),
+                'val/v_ang_rmse': val_results.get('v_ang_rmse', 0),
+                'val/v_ang_mae': val_results.get('v_ang_mae', 0),
+
+                # Parameter estimation metrics
+                'val/r_line_rmse': val_results.get('r_line_rmse', 0),
+                'val/r_line_mae': val_results.get('r_line_mae', 0),
+                'val/x_line_rmse': val_results.get('x_line_rmse', 0),
+                'val/x_line_mae': val_results.get('x_line_mae', 0),
+
+                # Training dynamics
+                'train/learning_rate': current_lr,
+                'train/epoch': epoch,
+            }, step=epoch)
 
         # Save best model
         if val_results['total'] < best_val_loss:
@@ -340,8 +414,20 @@ def main(args):
     print(f"Best validation loss: {best_val_loss:.6f}")
     print(f"{'='*60}\n")
 
+    # Close loggers
     if writer:
         writer.close()
+
+    if swanlab_run:
+        # Log final summary
+        swanlab.log({
+            'summary/best_val_loss': best_val_loss,
+            'summary/total_epochs': epoch,
+            'summary/training_time_hours': elapsed / 3600,
+            'summary/model_parameters': n_params,
+        })
+        swanlab.finish()
+        print("✓ SwanLab experiment finished")
 
 
 if __name__ == "__main__":
