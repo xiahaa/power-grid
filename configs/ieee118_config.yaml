@@ -1,0 +1,116 @@
+# Configuration for IEEE 118-bus system (large-scale test)
+
+# System parameters
+system:
+  name: "ieee118"
+  num_buses: 118
+  base_voltage: 138  # kV
+  pmu_coverage: 0.25  # 25% PMU placement
+
+# Data generation
+data:
+  num_scenarios: 2000
+  time_steps: 576      # 48 hours with 5-min intervals
+  noise_std: 0.015     # 1.5% measurement noise
+  parameter_drift:
+    enabled: true
+    lines: [5, 12, 25, 38, 52]  # Multiple critical lines
+    drift_range: [0.03, 0.12]
+  pv_penetration: 0.3
+  load_profile: "mixed"  # Industrial + commercial
+
+# Model architecture (larger for complex system)
+model:
+  spatial_encoder:
+    type: "GAT"
+    hidden_dim: 128
+    num_heads: 8
+    num_layers: 3
+    dropout: 0.15
+
+  temporal_encoder:
+    type: "Mamba"
+    d_model: 128
+    d_state: 32
+    d_conv: 4
+    expand: 2
+    num_layers: 4
+
+  state_head:
+    hidden_dims: [256, 128, 64]
+    output_dim: 2
+    activation: "gelu"
+
+  parameter_head:
+    hidden_dims: [256, 128, 64]
+    output_dim: 2
+    temporal_pooling: "ewma"
+    alpha: 0.95
+
+# Physics constraints
+physics:
+  enabled: true
+  constraint_type: "hard"
+  projection_method: "cvxpy"
+  max_iterations: 30
+  tolerance: 5e-5
+  power_flow:
+    slack_bus: 0
+    voltage_limits: [0.94, 1.06]
+    power_balance_weight: 15.0
+
+# Loss function
+loss:
+  state_weight: 1.0
+  parameter_weight: 0.3
+  physics_weight: 0.15
+  temporal_smoothness: 0.02
+
+# Training
+training:
+  batch_size: 16       # Smaller batch for larger system
+  num_epochs: 300
+  learning_rate: 0.0005
+  lr_scheduler:
+    type: "cosine"
+    T_max: 300
+    eta_min: 1e-7
+  optimizer: "adamw"
+  weight_decay: 1e-4
+  grad_clip: 0.5
+
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+
+  save_dir: "checkpoints/ieee118"
+  save_freq: 15
+  early_stopping:
+    patience: 50
+    min_delta: 5e-6
+
+# Evaluation
+evaluation:
+  metrics:
+    - "rmse"
+    - "mae"
+    - "mape"
+  robustness_tests:
+    - "missing_measurements"
+    - "topology_change"
+    - "bad_data"
+    - "cascading_failure"
+
+# Hardware
+hardware:
+  device: "cuda"
+  num_workers: 8
+  pin_memory: true
+  mixed_precision: true  # Enable for large system
+
+# Logging
+logging:
+  use_tensorboard: true
+  log_dir: "logs/ieee118"
+  log_freq: 5
+  save_visualization: true

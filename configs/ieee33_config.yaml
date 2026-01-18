@@ -1,0 +1,116 @@
+# Configuration for IEEE 33-bus system
+
+# System parameters
+system:
+  name: "ieee33"
+  num_buses: 33
+  base_voltage: 12.66  # kV
+  pmu_coverage: 0.3    # 30% PMU placement
+
+# Data generation
+data:
+  num_scenarios: 1000
+  time_steps: 288      # 24 hours with 5-min intervals
+  noise_std: 0.02      # 2% measurement noise
+  parameter_drift:
+    enabled: true
+    lines: [2, 5, 10]  # Lines with aging/temperature drift
+    drift_range: [0.05, 0.15]  # 5-15% resistance increase
+  pv_penetration: 0.4  # 40% buses with PV
+  load_profile: "residential"
+
+# Model architecture
+model:
+  spatial_encoder:
+    type: "GAT"        # GAT or GraphSage
+    hidden_dim: 64
+    num_heads: 4
+    num_layers: 2
+    dropout: 0.1
+
+  temporal_encoder:
+    type: "Mamba"
+    d_model: 64
+    d_state: 16
+    d_conv: 4
+    expand: 2
+    num_layers: 3
+
+  state_head:
+    hidden_dims: [128, 64]
+    output_dim: 2       # V, theta per bus
+    activation: "relu"
+
+  parameter_head:
+    hidden_dims: [128, 64]
+    output_dim: 2       # R, X per line
+    temporal_pooling: "ewma"  # Exponential weighted moving average
+    alpha: 0.9
+
+# Physics constraints
+physics:
+  enabled: true
+  constraint_type: "hard"  # "soft" or "hard"
+  projection_method: "cvxpy"  # "cvxpy" or "gradient_descent"
+  max_iterations: 20
+  tolerance: 1e-4
+  power_flow:
+    slack_bus: 0
+    voltage_limits: [0.95, 1.05]  # p.u.
+    power_balance_weight: 10.0
+
+# Loss function
+loss:
+  state_weight: 1.0
+  parameter_weight: 0.5
+  physics_weight: 0.1
+  temporal_smoothness: 0.01
+
+# Training
+training:
+  batch_size: 32
+  num_epochs: 200
+  learning_rate: 0.001
+  lr_scheduler:
+    type: "cosine"
+    T_max: 200
+    eta_min: 1e-6
+  optimizer: "adam"
+  weight_decay: 1e-5
+  grad_clip: 1.0
+
+  # Data split
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+
+  # Checkpointing
+  save_dir: "checkpoints/ieee33"
+  save_freq: 10
+  early_stopping:
+    patience: 30
+    min_delta: 1e-5
+
+# Evaluation
+evaluation:
+  metrics:
+    - "rmse"
+    - "mae"
+    - "mape"
+  robustness_tests:
+    - "missing_measurements"
+    - "topology_change"
+    - "bad_data"
+
+# Hardware
+hardware:
+  device: "cuda"
+  num_workers: 4
+  pin_memory: true
+
+# Logging
+logging:
+  use_tensorboard: true
+  log_dir: "logs/ieee33"
+  log_freq: 10
+  save_visualization: true
