@@ -6,7 +6,9 @@ for real-time state estimation on new data.
 """
 
 import sys
-sys.path.append('src')
+import os
+# Add src directory to path (insert at beginning to avoid conflicts)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 import torch
 import numpy as np

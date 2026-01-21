@@ -170,10 +170,20 @@ def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
         for key in batch[0]['true_states'].keys()
     }
 
-    parameters = {
-        key: torch.stack([b['parameters'][key] for b in batch])
-        for key in batch[0]['parameters'].keys()
-    }
+    # Parameters are stored per line, but model predicts per edge
+    # Expand line parameters to edge parameters (duplicate for bidirectional edges)
+    num_edges = batch[0]['topology']['edge_index'].shape[1]
+    num_lines = len(batch[0]['parameters']['r_line'])
+    assert num_edges == 2 * num_lines, f"Expected {2*num_lines} edges for {num_lines} lines, got {num_edges}"
+
+    parameters = {}
+    for key in batch[0]['parameters'].keys():
+        # Stack batch dimension: [batch_size, num_lines]
+        line_params = torch.stack([b['parameters'][key] for b in batch])
+        # Expand to edges: duplicate each line parameter for bidirectional edges
+        # [batch_size, num_lines] -> [batch_size, num_edges]
+        edge_params = line_params.repeat_interleave(2, dim=1)
+        parameters[key] = edge_params
 
     # Graphs (same topology for all samples in practice, but keep flexible)
     topology = {

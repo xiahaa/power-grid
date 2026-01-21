@@ -8,7 +8,9 @@ Usage:
 """
 
 import sys
-sys.path.append('src')
+import os
+# Add src directory to path (insert at beginning to avoid conflicts)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 def test_swanlab_installation():
     """Test if SwanLab is installed"""

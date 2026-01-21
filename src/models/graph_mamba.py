@@ -322,17 +322,22 @@ class GraphMamba(nn.Module):
         # Input projection
         self.input_proj = nn.Linear(input_dim, spatial_config['hidden_dim'])
 
-        # Spatial encoder
+        # Spatial encoder - map config keys to expected parameters
+        spatial_encoder_kwargs = spatial_config.copy()
+        if 'type' in spatial_encoder_kwargs:
+            spatial_encoder_kwargs['encoder_type'] = spatial_encoder_kwargs.pop('type')
         self.spatial_encoder = SpatialEncoder(
             in_channels=spatial_config['hidden_dim'],
-            **spatial_config
+            **spatial_encoder_kwargs
         )
 
         spatial_out_dim = self.spatial_encoder.output_dim
 
         # Temporal encoder (node-wise)
         temporal_config['d_model'] = spatial_out_dim
-        self.temporal_encoder = MambaBlock(**temporal_config)
+        # Remove type key as MambaBlock doesn't expect it
+        temporal_encoder_kwargs = {k: v for k, v in temporal_config.items() if k != 'type'}
+        self.temporal_encoder = MambaBlock(**temporal_encoder_kwargs)
 
         # Output heads
         self.state_head = StateHead(

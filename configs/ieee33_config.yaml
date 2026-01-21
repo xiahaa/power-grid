@@ -53,7 +53,7 @@ physics:
   constraint_type: "hard"  # "soft" or "hard"
   projection_method: "cvxpy"  # "cvxpy" or "gradient_descent"
   max_iterations: 20
-  tolerance: 1e-4
+  tolerance: 0.0001
   power_flow:
     slack_bus: 0
     voltage_limits: [0.95, 1.05]  # p.u.
@@ -74,9 +74,9 @@ training:
   lr_scheduler:
     type: "cosine"
     T_max: 200
-    eta_min: 1e-6
+    eta_min: 0.000001
   optimizer: "adam"
-  weight_decay: 1e-5
+  weight_decay: 0.00001
   grad_clip: 1.0
 
   # Data split
@@ -89,7 +89,7 @@ training:
   save_freq: 10
   early_stopping:
     patience: 30
-    min_delta: 1e-5
+    min_delta: 0.00001
 
 # Evaluation
 evaluation:

@@ -16,6 +16,7 @@ Date: 2026-01-18
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 from typing import Dict, Tuple, Optional
 import warnings
@@ -362,9 +363,13 @@ class PhysicsInformedGraphMamba(nn.Module):
             measurements, edge_index, edge_attr, obs_mask
         )
 
-        # Apply physics constraints
+        # Apply physics constraints (use last time step of measurements)
+        last_measurements = {
+            key: val[:, -1] if val.dim() > 2 else val
+            for key, val in measurements.items()
+        }
         corrected_states, constraint_loss = self.physics_layer(
-            states, parameters, edge_index, measurements
+            states, parameters, edge_index, last_measurements
         )
 
         return corrected_states, parameters, constraint_loss

@@ -8,7 +8,7 @@ Date: 2026-01-18
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict
+from typing import Dict, Tuple
 
 
 class JointEstimationLoss(nn.Module):
@@ -134,8 +134,9 @@ class JointEstimationLoss(nn.Module):
             total_loss: Scalar loss
             loss_dict: Dictionary of individual loss components
         """
-        # Individual losses
-        l_state = self.state_loss(pred_states, true_states, obs_mask)
+        # Individual losses (use last time step of obs_mask for final predictions)
+        last_obs_mask = obs_mask[:, -1] if obs_mask is not None and obs_mask.dim() > 2 else obs_mask
+        l_state = self.state_loss(pred_states, true_states, last_obs_mask)
         l_param = self.parameter_loss(pred_params, true_params)
         l_physics = physics_loss
         l_smooth = (
