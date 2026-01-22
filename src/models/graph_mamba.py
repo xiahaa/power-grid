@@ -167,7 +167,11 @@ class StateHead(nn.Module):
             layers.append(nn.LayerNorm(hidden_dim))
             prev_dim = hidden_dim
 
-        layers.append(nn.Linear(prev_dim, output_dim))
+        # Final layer with smaller initialization for better gradient flow
+        final_layer = nn.Linear(prev_dim, output_dim)
+        nn.init.xavier_uniform_(final_layer.weight, gain=0.01)
+        nn.init.zeros_(final_layer.bias)
+        layers.append(final_layer)
         self.network = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
@@ -214,7 +218,11 @@ class ParameterHead(nn.Module):
             layers.append(nn.LayerNorm(hidden_dim))
             prev_dim = hidden_dim
 
-        layers.append(nn.Linear(prev_dim, output_dim))
+        # Final layer with smaller initialization for better gradient flow
+        final_layer = nn.Linear(prev_dim, output_dim)
+        nn.init.xavier_uniform_(final_layer.weight, gain=0.01)  # Small init
+        nn.init.zeros_(final_layer.bias)
+        layers.append(final_layer)
         self.network = nn.Sequential(*layers)
 
         # Edge pooling: aggregate node features to edges
@@ -270,9 +278,10 @@ class ParameterHead(nn.Module):
         # Predict parameters
         out = self.network(pooled)  # [batch_size, num_edges, 2]
 
-        # Ensure positive parameters
-        r_line = F.softplus(out[..., 0])
-        x_line = F.softplus(out[..., 1])
+        # Ensure positive parameters with better scaling
+        # Use sigmoid + scaling to constrain to reasonable range [0.01, 3.0]
+        r_line = torch.sigmoid(out[..., 0]) * 2.99 + 0.01
+        x_line = torch.sigmoid(out[..., 1]) * 2.99 + 0.01
 
         return {
             'r_line': r_line,

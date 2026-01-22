@@ -64,12 +64,34 @@ class PowerGridDataset(Dataset):
 
     def _build_sequences(self) -> List[Tuple[int, int]]:
         """Build list of (scenario_idx, start_time) tuples"""
+        import numpy as np
         sequences = []
+        n_filtered = 0
+
         for scenario_idx, scenario in enumerate(self.data):
             n_times = scenario['measurements']['v_mag'].shape[0]
-            max_start = n_times - self.sequence_length - self.prediction_horizon
+            #Use early timesteps (first 20) which have better variation
+            # Data quality degrades significantly after initial timesteps
+            max_start = min(20, n_times) - self.sequence_length - self.prediction_horizon
+
+            if max_start < 1:
+                continue
+
             for start_t in range(max_start):
+                # Check if target timestep has valid data
+                target_t = start_t + self.sequence_length
+                v_mag_target = scenario['true_states']['v_mag'][target_t:target_t+self.prediction_horizon]
+
+                # Filter out completely flat profiles (power flow failures)
+                if np.std(v_mag_target) < 1e-6:  # Only filter obvious failures
+                    n_filtered += 1
+                    continue
+
                 sequences.append((scenario_idx, start_t))
+
+        if n_filtered > 0 and self.split == 'train':
+            print(f"  Filtered {n_filtered} sequences with flat voltage profiles")
+
         return sequences
 
     def __len__(self) -> int:
@@ -166,7 +188,7 @@ def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
     obs_mask = torch.stack([b['obs_mask'] for b in batch])
 
     true_states = {
-        key: torch.stack([b['true_states'][key] for b in batch])
+        key: torch.stack([b['true_states'][key] for b in batch]).squeeze(1)  # Remove time dim
         for key in batch[0]['true_states'].keys()
     }
 
