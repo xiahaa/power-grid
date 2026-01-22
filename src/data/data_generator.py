@@ -169,7 +169,7 @@ class PowerGridDataGenerator:
             )
 
     def _add_pv_systems(self):
-        """Add PV systems to random buses"""
+        """Add PV systems to random buses with FIXED capacity per scenario"""
         num_pv_buses = int(self.num_buses * self.pv_penetration)
         # Avoid slack bus
         available_buses = [b for b in range(self.num_buses) if b != self.net.ext_grid.at[0, 'bus']]
@@ -177,14 +177,14 @@ class PowerGridDataGenerator:
 
         self.pv_buses = []
         for bus in pv_buses:
-            # PV capacity: 50-200% of load
+            # PV capacity: 50-200% of base load (FIXED per scenario)
             bus_load = self.net.load[self.net.load.bus == bus]['p_mw'].sum()
             if bus_load > 0:
                 pv_capacity = bus_load * np.random.uniform(0.5, 2.0)
                 pp.create_sgen(
                     self.net,
                     bus=int(bus),
-                    p_mw=0,  # Will be updated dynamically
+                    p_mw=pv_capacity,  # Store capacity (will modulate with solar profile)
                     q_mvar=0,
                     name=f"PV_{bus}"
                 )
@@ -198,7 +198,16 @@ class PowerGridDataGenerator:
 
         # Reset network
         self.net = self._load_network()
+
+        # CRITICAL FIX: Store ORIGINAL base loads before any modification
+        base_loads_p = self.net.load['p_mw'].values.copy()
+        base_loads_q = self.net.load['q_mvar'].values.copy()
+
         self._add_pv_systems()
+
+        # CRITICAL FIX: Store PV capacities (fixed per scenario)
+        pv_capacities = self.net.sgen['p_mw'].values.copy() if len(self.net.sgen) > 0 else np.array([])
+
         self._apply_parameter_drift(scenario_idx)
 
         # Storage for time series
@@ -225,18 +234,16 @@ class PowerGridDataGenerator:
         for t in range(self.time_steps):
             hour = (t * 5 / 60) % 24  # 5-minute intervals
 
-            # Update loads
-            for idx, load in self.net.load.iterrows():
-                base_p = self.net.load.at[idx, 'p_mw']
-                base_q = self.net.load.at[idx, 'q_mvar']
+            # CRITICAL FIX: Update loads from ORIGINAL base values
+            for idx in range(len(self.net.load)):
+                base_p = base_loads_p[idx]  # Use stored original
+                base_q = base_loads_q[idx]
                 self.net.load.at[idx, 'p_mw'] = self._generate_load_profile(base_p, hour)
                 self.net.load.at[idx, 'q_mvar'] = self._generate_load_profile(base_q, hour)
 
-            # Update PV generation
-            for idx, sgen in self.net.sgen.iterrows():
-                bus = self.net.sgen.at[idx, 'bus']
-                bus_load = self.net.load[self.net.load.bus == bus]['p_mw'].sum()
-                base_pv = bus_load * np.random.uniform(0.5, 2.0)
+            # CRITICAL FIX: Update PV generation from FIXED capacities
+            for idx in range(len(self.net.sgen)):
+                base_pv = pv_capacities[idx]  # Use stored capacity (not random!)
                 self.net.sgen.at[idx, 'p_mw'] = self._generate_pv_profile(base_pv, hour)
 
             # Run power flow
