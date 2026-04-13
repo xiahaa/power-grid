@@ -14,7 +14,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GATConv, GraphSAGE
-from mamba_ssm import Mamba
+
+try:
+    from mamba_ssm import Mamba
+
+    MAMBA_AVAILABLE = True
+except ImportError:
+    MAMBA_AVAILABLE = False
 from typing import Dict, Tuple, Optional
 
 
@@ -28,7 +34,7 @@ class SpatialEncoder(nn.Module):
         num_heads: int = 4,
         num_layers: int = 2,
         dropout: float = 0.1,
-        encoder_type: str = "GAT"
+        encoder_type: str = "GAT",
     ):
         """
         Args:
@@ -51,11 +57,7 @@ class SpatialEncoder(nn.Module):
                 out_dim = hidden_dim
                 self.convs.append(
                     GATConv(
-                        in_dim,
-                        out_dim,
-                        heads=num_heads,
-                        dropout=dropout,
-                        concat=True
+                        in_dim, out_dim, heads=num_heads, dropout=dropout, concat=True
                     )
                 )
         else:
@@ -68,7 +70,7 @@ class SpatialEncoder(nn.Module):
         self,
         x: torch.Tensor,
         edge_index: torch.Tensor,
-        edge_attr: Optional[torch.Tensor] = None
+        edge_attr: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Args:
@@ -106,7 +108,7 @@ class MambaBlock(nn.Module):
         d_state: int = 16,
         d_conv: int = 4,
         expand: int = 2,
-        num_layers: int = 3
+        num_layers: int = 3,
     ):
         """
         Args:
@@ -118,15 +120,19 @@ class MambaBlock(nn.Module):
         """
         super().__init__()
 
-        self.layers = nn.ModuleList([
-            Mamba(
-                d_model=d_model,
-                d_state=d_state,
-                d_conv=d_conv,
-                expand=expand
+        if MAMBA_AVAILABLE:
+            self.layers = nn.ModuleList(
+                [
+                    Mamba(
+                        d_model=d_model, d_state=d_state, d_conv=d_conv, expand=expand
+                    )
+                    for _ in range(num_layers)
+                ]
             )
-            for _ in range(num_layers)
-        ])
+        else:
+            self.layers = nn.ModuleList(
+                [nn.LSTM(d_model, d_model, batch_first=True) for _ in range(num_layers)]
+            )
 
         self.norm = nn.LayerNorm(d_model)
 
@@ -140,7 +146,11 @@ class MambaBlock(nn.Module):
         """
         h = x
         for layer in self.layers:
-            h = h + layer(self.norm(h))  # Residual connection
+            if hasattr(layer, "A_log"):
+                h = h + layer(self.norm(h))
+            else:
+                out, _ = layer(h)
+                h = h + out
         return h
 
 
@@ -152,7 +162,7 @@ class StateHead(nn.Module):
         in_dim: int,
         hidden_dims: list = [128, 64],
         output_dim: int = 2,  # V_mag, V_ang per bus
-        activation: str = "relu"
+        activation: str = "relu",
     ):
         super().__init__()
 
@@ -188,10 +198,7 @@ class StateHead(nn.Module):
         v_mag = torch.sigmoid(out[..., 0]) * 0.3 + 0.85  # Constrain to [0.85, 1.15]
         v_ang = torch.tanh(out[..., 1]) * 0.5  # Constrain to [-0.5, 0.5] rad
 
-        return {
-            'v_mag': v_mag,
-            'v_ang': v_ang
-        }
+        return {"v_mag": v_mag, "v_ang": v_ang}
 
 
 class ParameterHead(nn.Module):
@@ -203,7 +210,7 @@ class ParameterHead(nn.Module):
         hidden_dims: list = [128, 64],
         output_dim: int = 2,  # R, X per line
         temporal_pooling: str = "ewma",
-        alpha: float = 0.9
+        alpha: float = 0.9,
     ):
         super().__init__()
 
@@ -229,9 +236,7 @@ class ParameterHead(nn.Module):
         self.edge_pooling = nn.Linear(in_dim * 2, in_dim)
 
     def forward(
-        self,
-        node_features: torch.Tensor,
-        edge_index: torch.Tensor
+        self, node_features: torch.Tensor, edge_index: torch.Tensor
     ) -> Dict[str, torch.Tensor]:
         """
         Args:
@@ -254,12 +259,16 @@ class ParameterHead(nn.Module):
             for t in range(seq_len):
                 from_feat = node_features[b, t, from_nodes]  # [num_edges, in_dim]
                 to_feat = node_features[b, t, to_nodes]
-                concat_feat = torch.cat([from_feat, to_feat], dim=-1)  # [num_edges, 2*in_dim]
+                concat_feat = torch.cat(
+                    [from_feat, to_feat], dim=-1
+                )  # [num_edges, 2*in_dim]
                 edge_feat = self.edge_pooling(concat_feat)  # [num_edges, in_dim]
                 batch_edge_feat.append(edge_feat)
             edge_features.append(torch.stack(batch_edge_feat))
 
-        edge_features = torch.stack(edge_features)  # [batch_size, seq_len, num_edges, in_dim]
+        edge_features = torch.stack(
+            edge_features
+        )  # [batch_size, seq_len, num_edges, in_dim]
 
         # Temporal pooling (parameters change slowly)
         if self.temporal_pooling == "mean":
@@ -268,7 +277,7 @@ class ParameterHead(nn.Module):
             # Exponential weighted moving average (more weight on recent)
             weights = torch.tensor(
                 [self.alpha ** (seq_len - 1 - t) for t in range(seq_len)],
-                device=edge_features.device
+                device=edge_features.device,
             )
             weights = weights / weights.sum()
             pooled = (edge_features * weights.view(1, -1, 1, 1)).sum(dim=1)
@@ -283,10 +292,7 @@ class ParameterHead(nn.Module):
         r_line = torch.sigmoid(out[..., 0]) * 2.99 + 0.01
         x_line = torch.sigmoid(out[..., 1]) * 2.99 + 0.01
 
-        return {
-            'r_line': r_line,
-            'x_line': x_line
-        }
+        return {"r_line": r_line, "x_line": x_line}
 
 
 class GraphMamba(nn.Module):
@@ -305,7 +311,7 @@ class GraphMamba(nn.Module):
         spatial_config: dict = None,
         temporal_config: dict = None,
         state_head_config: dict = None,
-        parameter_head_config: dict = None
+        parameter_head_config: dict = None,
     ):
         super().__init__()
 
@@ -314,49 +320,46 @@ class GraphMamba(nn.Module):
 
         # Default configs
         spatial_config = spatial_config or {
-            'hidden_dim': 64,
-            'num_heads': 4,
-            'num_layers': 2,
-            'dropout': 0.1
+            "hidden_dim": 64,
+            "num_heads": 4,
+            "num_layers": 2,
+            "dropout": 0.1,
         }
 
         temporal_config = temporal_config or {
-            'd_model': 64,
-            'd_state': 16,
-            'd_conv': 4,
-            'expand': 2,
-            'num_layers': 3
+            "d_model": 64,
+            "d_state": 16,
+            "d_conv": 4,
+            "expand": 2,
+            "num_layers": 3,
         }
 
         # Input projection
-        self.input_proj = nn.Linear(input_dim, spatial_config['hidden_dim'])
+        self.input_proj = nn.Linear(input_dim, spatial_config["hidden_dim"])
 
         # Spatial encoder - map config keys to expected parameters
         spatial_encoder_kwargs = spatial_config.copy()
-        if 'type' in spatial_encoder_kwargs:
-            spatial_encoder_kwargs['encoder_type'] = spatial_encoder_kwargs.pop('type')
+        if "type" in spatial_encoder_kwargs:
+            spatial_encoder_kwargs["encoder_type"] = spatial_encoder_kwargs.pop("type")
         self.spatial_encoder = SpatialEncoder(
-            in_channels=spatial_config['hidden_dim'],
-            **spatial_encoder_kwargs
+            in_channels=spatial_config["hidden_dim"], **spatial_encoder_kwargs
         )
 
         spatial_out_dim = self.spatial_encoder.output_dim
 
         # Temporal encoder (node-wise)
-        temporal_config['d_model'] = spatial_out_dim
+        temporal_config["d_model"] = spatial_out_dim
         # Remove type key as MambaBlock doesn't expect it
-        temporal_encoder_kwargs = {k: v for k, v in temporal_config.items() if k != 'type'}
+        temporal_encoder_kwargs = {
+            k: v for k, v in temporal_config.items() if k != "type"
+        }
         self.temporal_encoder = MambaBlock(**temporal_encoder_kwargs)
 
         # Output heads
-        self.state_head = StateHead(
-            in_dim=spatial_out_dim,
-            **(state_head_config or {})
-        )
+        self.state_head = StateHead(in_dim=spatial_out_dim, **(state_head_config or {}))
 
         self.parameter_head = ParameterHead(
-            in_dim=spatial_out_dim,
-            **(parameter_head_config or {})
+            in_dim=spatial_out_dim, **(parameter_head_config or {})
         )
 
     def forward(
@@ -364,7 +367,7 @@ class GraphMamba(nn.Module):
         measurements: Dict[str, torch.Tensor],
         edge_index: torch.Tensor,
         edge_attr: Optional[torch.Tensor] = None,
-        obs_mask: Optional[torch.Tensor] = None
+        obs_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
         """
         Args:
@@ -378,14 +381,13 @@ class GraphMamba(nn.Module):
             states: Dict with estimated states
             parameters: Dict with estimated parameters
         """
-        batch_size, seq_len, num_nodes = measurements['v_mag'].shape
+        batch_size, seq_len, num_nodes = measurements["v_mag"].shape
 
         # Stack measurements as node features
-        x = torch.stack([
-            measurements['v_mag'],
-            measurements['p_bus'],
-            measurements['q_bus']
-        ], dim=-1)  # [batch_size, seq_len, num_nodes, 3]
+        x = torch.stack(
+            [measurements["v_mag"], measurements["p_bus"], measurements["q_bus"]],
+            dim=-1,
+        )  # [batch_size, seq_len, num_nodes, 3]
 
         # Handle missing measurements
         if obs_mask is not None:
@@ -409,8 +411,12 @@ class GraphMamba(nn.Module):
         batch_size, seq_len, num_nodes, spatial_dim = spatial_features.shape
         temporal_features = []
         for n in range(num_nodes):
-            node_seq = spatial_features[:, :, n, :]  # [batch_size, seq_len, spatial_dim]
-            h_temporal = self.temporal_encoder(node_seq)  # [batch_size, seq_len, spatial_dim]
+            node_seq = spatial_features[
+                :, :, n, :
+            ]  # [batch_size, seq_len, spatial_dim]
+            h_temporal = self.temporal_encoder(
+                node_seq
+            )  # [batch_size, seq_len, spatial_dim]
             temporal_features.append(h_temporal)
 
         temporal_features = torch.stack(temporal_features, dim=2)
@@ -429,18 +435,14 @@ class GraphMamba(nn.Module):
 
 if __name__ == "__main__":
     # Test model
-    model = GraphMamba(
-        num_nodes=33,
-        num_edges=32,
-        input_dim=3
-    )
+    model = GraphMamba(num_nodes=33, num_edges=32, input_dim=3)
 
     # Dummy data
     batch_size, seq_len = 4, 10
     measurements = {
-        'v_mag': torch.randn(batch_size, seq_len, 33),
-        'p_bus': torch.randn(batch_size, seq_len, 33),
-        'q_bus': torch.randn(batch_size, seq_len, 33),
+        "v_mag": torch.randn(batch_size, seq_len, 33),
+        "p_bus": torch.randn(batch_size, seq_len, 33),
+        "q_bus": torch.randn(batch_size, seq_len, 33),
     }
     edge_index = torch.randint(0, 33, (2, 64))  # Bidirectional
 

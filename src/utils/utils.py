@@ -10,6 +10,7 @@ import numpy as np
 from typing import Dict, Tuple
 import yaml
 from pathlib import Path
+from typing import Optional
 
 
 def load_config(config_path: str) -> dict:
@@ -17,6 +18,33 @@ def load_config(config_path: str) -> dict:
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     return config
+
+
+def resolve_dataset_path(config: dict, data_path: Optional[str] = None) -> str:
+    """Resolve the dataset path with sensible IEEE123 fallbacks."""
+    if data_path:
+        return data_path
+
+    data_cfg = config.get("data", {})
+    configured_path = data_cfg.get("dataset_path")
+    if configured_path:
+        return configured_path
+
+    system_name = config.get("system", {}).get("name", "dataset")
+    default_path = Path("data") / f"{system_name}_dataset.pkl"
+    if default_path.exists():
+        return str(default_path)
+
+    candidates = sorted(Path("data").glob(f"{system_name}*.pkl"))
+    if candidates:
+        preferred_suffixes = ["_real", "_large", "_small"]
+        for suffix in preferred_suffixes:
+            preferred_path = Path("data") / f"{system_name}{suffix}.pkl"
+            if preferred_path in candidates:
+                return str(preferred_path)
+        return str(candidates[0])
+
+    return str(default_path)
 
 
 def save_checkpoint(

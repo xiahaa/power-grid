@@ -66,3 +66,9 @@ tmp/
 temp/
 *.tmp
 scripts/test_swanlab.py
+
+
+results/
+tests/
+data/ieee123_opendss/
+configs/
